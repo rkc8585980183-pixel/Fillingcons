@@ -78,6 +78,15 @@ export function exportToExcel(
   XLSX.writeFile(workbook, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`);
 }
 
+export function dedupeRows(rows: { date: string; outlet: string; item: string; qty: number }[]) {
+  const map = new Map<string, { date: string; outlet: string; item: string; qty: number }>();
+  for (const row of rows) {
+    const key = `${row.date}|${row.outlet.trim().toLowerCase()}|${row.item.trim().toLowerCase()}`;
+    map.set(key, row);
+  }
+  return [...map.values()];
+}
+
 export function exportToCSV(
   rows: Record<string, string | number>[],
   filename: string

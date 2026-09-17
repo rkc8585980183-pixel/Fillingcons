@@ -2,15 +2,17 @@ import { useState } from 'react';
 import { UploadComponent, exportToExcel } from '@/components/UploadComponent';
 import { usePurchases } from '@/hooks/useTable';
 import { supabase } from '@/lib/supabase';
+import { dedupeRows } from '@/lib/excel';
 
 export function PurchaseUploadPage() {
   const { rows, refetch } = usePurchases();
   const [downloading, setDownloading] = useState(false);
 
   const handleSave = async (data: { date: string; outlet: string; item: string; qty: number }[]) => {
+    const deduped = dedupeRows(data);
     const { error } = await supabase
       .from('purchases')
-      .upsert(data, { onConflict: 'date,outlet,item' });
+      .upsert(deduped, { onConflict: 'date,outlet,item' });
     if (error) return { error: error.message };
     await refetch();
     return { error: null };

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { UploadComponent, exportToExcel } from '@/components/UploadComponent';
 import { useClosingStock } from '@/hooks/useTable';
 import { supabase } from '@/lib/supabase';
+import { dedupeRows } from '@/lib/excel';
 import { PageHeader } from '@/components/PageHeader';
 import { Card, CardHeader, CardBody } from '@/components/Card';
 import { Button } from '@/components/Button';
@@ -18,9 +19,10 @@ export function ClosingUploadPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const handleSave = async (data: { date: string; outlet: string; item: string; qty: number }[]) => {
+    const deduped = dedupeRows(data);
     const { error } = await supabase
       .from('closing_stock')
-      .upsert(data, { onConflict: 'date,outlet,item' });
+      .upsert(deduped, { onConflict: 'date,outlet,item' });
     if (error) return { error: error.message };
     await refetch();
     return { error: null };
