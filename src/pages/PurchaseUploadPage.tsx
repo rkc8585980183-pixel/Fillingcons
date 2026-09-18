@@ -3,17 +3,20 @@ import { UploadComponent, exportToExcel, type UploadColumn } from '@/components/
 import { usePurchases } from '@/hooks/useTable';
 import { supabase } from '@/lib/supabase';
 
-// Maps to the real Purchase Excel export headers:
-// Sku Code, Item Name, ..., PO No., Delivery Location, Delivery Location Code,
-// ..., UOM, Received Qty, Received Date, ...
+// Maps to the real Purchase Excel export headers.
+// Date and Quantity are taken from the PO itself (PurchaseOrder Date /
+// PO Confirmed Qty) rather than Received Date / Received Qty, because
+// many POs are physically received before the source system marks them
+// as "Received" — using the confirmed PO fields means every placed
+// order is counted, not just the ones already flagged received there.
 const PURCHASE_COLUMNS: UploadColumn[] = [
-  { fieldName: 'date', label: 'Date', aliases: ['received date', 'receiveddate'], required: true, type: 'date' },
+  { fieldName: 'date', label: 'Date', aliases: ['purchaseorder date', 'purchase order date', 'po date'], required: true, type: 'date' },
   { fieldName: 'outlet', label: 'Outlet', aliases: ['delivery location', 'delivery location code'], required: true },
   { fieldName: 'item', label: 'Item', aliases: ['item name', 'sku code'], required: true },
   { fieldName: 'sku_code', label: 'Sku Code', aliases: ['sku code'], required: false },
   { fieldName: 'po_no', label: 'PO No.', aliases: ['po no.', 'po no', 'ponumber'], required: false },
   { fieldName: 'uom', label: 'UOM', aliases: ['uom'], required: false },
-  { fieldName: 'qty', label: 'Quantity', aliases: ['received qty', 'receivedqty'], required: true, type: 'number' },
+  { fieldName: 'qty', label: 'Quantity', aliases: ['po confirmed qty', 'poconfirmedqty'], required: true, type: 'number' },
 ];
 
 export function PurchaseUploadPage() {
