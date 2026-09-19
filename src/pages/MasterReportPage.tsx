@@ -1,19 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/Button';
-import { Input } from '@/components/Input';
-import { ReportFilters, type ReportFilterValues } from '@/components/ReportFilters';
+import { Input, Select } from '@/components/Input';
 import { useSales, usePurchases, useClosingStock, useOutlets, useAreaManagers, useRecipeMapping } from '@/hooks/useTable';
-import { buildReportRows, sumRows, computeRemark, computeRemark2 } from '@/lib/report';
+import { buildReportRows, aggregateByOutlet, sumRows, computeRemark, computeRemark2 } from '@/lib/report';
 import { exportToExcel } from '@/lib/excel';
-import type { ReportRow, ReportType } from '@/types';
+import type { ReportRow } from '@/types';
 import { Download } from 'lucide-react';
 
-interface ReportPageProps {
-  reportType: ReportType;
-  title: string;
-  subtitle: string;
-}
+const ALL_ITEMS = '__all__';
 
 function today(): string {
   return new Date().toISOString().split('T')[0];
@@ -25,7 +20,7 @@ function remarkClass(remark: string): string {
   return 'text-amber-700 bg-amber-50';
 }
 
-export function ReportPage({ title, subtitle }: ReportPageProps) {
+export function MasterReportPage() {
   const { rows: sales } = useSales();
   const { rows: purchases } = usePurchases();
   const { rows: closingStock } = useClosingStock();
@@ -33,41 +28,40 @@ export function ReportPage({ title, subtitle }: ReportPageProps) {
   const { rows: managers } = useAreaManagers();
   const { rows: recipeMapping } = useRecipeMapping();
 
-  const [filters, setFilters] = useState<ReportFilterValues>({ reportDate: today() });
+  const [reportDate, setReportDate] = useState(today());
+  const [selectedFilling, setSelectedFilling] = useState(ALL_ITEMS);
+  const [outlet, setOutlet] = useState('');
+  const [areaManager, setAreaManager] = useState('');
   const [margin, setMargin] = useState(0.1);
   const [rows, setRows] = useState<ReportRow[]>([]);
 
-  const outletOptions = useMemo(() => outlets.map((o) => ({ value: o.name, label: o.name })), [outlets]);
-  const managerOptions = useMemo(() => managers.map((m) => ({ value: m.name, label: m.name })), [managers]);
-  const categoryOptions = useMemo(() => {
-    const set = new Set<string>();
-    recipeMapping.forEach((r) => r.category && set.add(r.category));
-    outlets.forEach((o) => o.category && set.add(o.category));
-    return Array.from(set).sort().map((c) => ({ value: c, label: c }));
-  }, [recipeMapping, outlets]);
-  const itemOptions = useMemo(() => {
+  const fillingOptions = useMemo(() => {
     const set = new Set<string>();
     recipeMapping.forEach((r) => r.ingredient_name && set.add(r.ingredient_name));
     return Array.from(set).sort().map((i) => ({ value: i, label: i }));
   }, [recipeMapping]);
 
+  const outletOptions = useMemo(() => outlets.map((o) => ({ value: o.name, label: o.name })), [outlets]);
+  const managerOptions = useMemo(() => managers.map((m) => ({ value: m.name, label: m.name })), [managers]);
+
   useEffect(() => {
-    const built = buildReportRows({
-      reportDate: filters.reportDate,
+    const allIngredientRows = buildReportRows({
+      reportDate,
       sales,
       purchases,
       closingStock,
       recipeMapping,
       outlets,
       filters: {
-        outlet: filters.outlet,
-        area_manager: filters.area_manager,
-        category: filters.category,
-        item: filters.item,
+        outlet: outlet || undefined,
+        area_manager: areaManager || undefined,
+        item: selectedFilling === ALL_ITEMS ? undefined : selectedFilling,
       },
     });
-    setRows(built);
-  }, [filters, sales, purchases, closingStock, recipeMapping, outlets]);
+
+    const finalRows = selectedFilling === ALL_ITEMS ? aggregateByOutlet(allIngredientRows) : allIngredientRows;
+    setRows(finalRows);
+  }, [reportDate, selectedFilling, outlet, areaManager, sales, purchases, closingStock, recipeMapping, outlets]);
 
   const rowsWithRemarks = rows.map((r) => ({
     ...r,
@@ -81,7 +75,6 @@ export function ReportPage({ title, subtitle }: ReportPageProps) {
     const data = rowsWithRemarks.map((r) => ({
       'Area Manager': r.area_manager,
       'Outlet Name': r.outlet,
-      'Item': r.item,
       'UOM': r.uom,
       'Day-1 Closing Stock (Opening)': r.opening,
       'Day-1 Purchase': r.purchase,
@@ -93,14 +86,15 @@ export function ReportPage({ title, subtitle }: ReportPageProps) {
       'Remark': r.remark,
       'Remark 2': r.remark2,
     }));
-    exportToExcel(data, `report_${filters.reportDate}.xlsx`, 'Report');
+    const label = selectedFilling === ALL_ITEMS ? 'all_items' : selectedFilling.replace(/[^a-z0-9]/gi, '_');
+    exportToExcel(data, `master_report_${label}_${reportDate}.xlsx`, 'Master Report');
   };
 
   return (
     <div className="p-6 max-w-full mx-auto">
       <PageHeader
-        title={title}
-        subtitle={subtitle}
+        title="Master Report"
+        subtitle="Pick one filling to see it alone, or 'All Items' to see every outlet's combined totals across all fillings."
         actions={
           <Button onClick={handleDownload}>
             <Download size={16} />
@@ -109,22 +103,20 @@ export function ReportPage({ title, subtitle }: ReportPageProps) {
         }
       />
 
-      <ReportFilters
-        filters={filters}
-        onChange={setFilters}
-        outlets={outletOptions}
-        managers={managerOptions}
-        categories={categoryOptions}
-        items={itemOptions}
-      >
-        <Input
-          label="Margin"
-          type="number"
-          step="0.01"
-          value={margin}
-          onChange={(e) => setMargin(parseFloat(e.target.value) || 0)}
-        />
-      </ReportFilters>
+      <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <Input label="Report Date" type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} />
+          <Select
+            label="Filling"
+            value={selectedFilling}
+            onChange={(e) => setSelectedFilling(e.target.value)}
+            options={[{ value: ALL_ITEMS, label: 'All Items (Combined)' }, ...fillingOptions]}
+          />
+          <Select label="Outlet" value={outlet} onChange={(e) => setOutlet(e.target.value)} options={outletOptions} placeholder="All Outlets" />
+          <Select label="Area Manager" value={areaManager} onChange={(e) => setAreaManager(e.target.value)} options={managerOptions} placeholder="All Managers" />
+          <Input label="Margin" type="number" step="0.01" value={margin} onChange={(e) => setMargin(parseFloat(e.target.value) || 0)} />
+        </div>
+      </div>
 
       <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
         <table className="w-full text-sm">
@@ -132,7 +124,6 @@ export function ReportPage({ title, subtitle }: ReportPageProps) {
             <tr className="bg-slate-50 border-b border-slate-200">
               <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">Area Manager</th>
               <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">Outlet Name</th>
-              <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">Item</th>
               <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">UOM</th>
               <th className="px-3 py-3 text-right font-semibold text-slate-600 whitespace-nowrap">Day-1 Closing</th>
               <th className="px-3 py-3 text-right font-semibold text-slate-600 whitespace-nowrap">Day-1 Purchase</th>
@@ -148,17 +139,16 @@ export function ReportPage({ title, subtitle }: ReportPageProps) {
           <tbody>
             {rowsWithRemarks.length === 0 ? (
               <tr>
-                <td colSpan={13} className="px-4 py-10 text-center text-slate-400">
+                <td colSpan={12} className="px-4 py-10 text-center text-slate-400">
                   No data for this date/filter combination.
                 </td>
               </tr>
             ) : (
               <>
                 {rowsWithRemarks.map((r) => (
-                  <tr key={`${r.outlet}-${r.item}`} className="border-b border-slate-100 hover:bg-slate-50">
+                  <tr key={r.outlet} className="border-b border-slate-100 hover:bg-slate-50">
                     <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{r.area_manager || '-'}</td>
                     <td className="px-3 py-2 text-slate-700 font-medium whitespace-nowrap">{r.outlet}</td>
-                    <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{r.item}</td>
                     <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{r.uom || '-'}</td>
                     <td className="px-3 py-2 text-right text-slate-700">{r.opening}</td>
                     <td className="px-3 py-2 text-right text-slate-700">{r.purchase}</td>
@@ -178,7 +168,7 @@ export function ReportPage({ title, subtitle }: ReportPageProps) {
                   </tr>
                 ))}
                 <tr className="bg-slate-50 font-semibold border-t-2 border-slate-300">
-                  <td className="px-3 py-3 text-slate-700" colSpan={4}>Total</td>
+                  <td className="px-3 py-3 text-slate-700" colSpan={3}>Total</td>
                   <td className="px-3 py-3 text-right text-slate-800">{totals.opening}</td>
                   <td className="px-3 py-3 text-right text-slate-800">{totals.purchase}</td>
                   <td className="px-3 py-3 text-right text-slate-800">{totals.closing}</td>
@@ -193,10 +183,6 @@ export function ReportPage({ title, subtitle }: ReportPageProps) {
           </tbody>
         </table>
       </div>
-      <p className="text-slate-400 text-xs mt-3">
-        Remark = Acceptable when Ideal equals |Variance| or |Variance| \u2264 Margin, else Need Attention.
-        Remark 2 = OK when Ideal \u2265 |Actual|, else Closing Mistake. Margin is adjustable above (default 0.1).
-      </p>
     </div>
   );
 }

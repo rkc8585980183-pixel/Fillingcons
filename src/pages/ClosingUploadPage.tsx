@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { UploadComponent, exportToExcel } from '@/components/UploadComponent';
+import { UploadComponent, exportToExcel, type UploadColumn } from '@/components/UploadComponent';
 import { useClosingStock } from '@/hooks/useTable';
 import { supabase } from '@/lib/supabase';
 import { PageHeader } from '@/components/PageHeader';
@@ -9,6 +9,15 @@ import { Input } from '@/components/Input';
 import { Plus, Pencil, Trash2, X } from 'lucide-react';
 import type { ClosingStockRecord } from '@/types';
 
+// Maps to the real Closing Stock raw export headers:
+// Outlet, Period, Period Date, Cadence, Item Code, Item Name, Category, ..., Unit, Qty, ...
+const CLOSING_COLUMNS: UploadColumn[] = [
+  { fieldName: 'date', label: 'Date', aliases: ['period date', 'closing date', 'stock date', 'date'], required: true, type: 'date' },
+  { fieldName: 'outlet', label: 'Outlet', aliases: ['outlet', 'store', 'shop', 'location'], required: true },
+  { fieldName: 'item', label: 'Item', aliases: ['item name', 'item', 'product', 'product name'], required: true },
+  { fieldName: 'qty', label: 'Quantity', aliases: ['qty', 'quantity', 'closing qty', 'closing quantity', 'stock'], required: true, type: 'number' },
+];
+
 export function ClosingUploadPage() {
   const { rows, refetch, insert, update, remove } = useClosingStock();
   const [downloading, setDownloading] = useState(false);
@@ -17,7 +26,9 @@ export function ClosingUploadPage() {
   const [form, setForm] = useState({ date: '', outlet: '', item: '', qty: 0 });
   const [formError, setFormError] = useState<string | null>(null);
 
-  const handleSave = async (data: { date: string; outlet: string; item: string; qty: number }[]) => {
+  // Closing is unique by (date, outlet, item): upsert replaces the
+  // existing snapshot for that key instead of duplicating it.
+  const handleSave = async (data: Record<string, string | number>[]) => {
     const { error } = await supabase
       .from('closing_stock')
       .upsert(data, { onConflict: 'date,outlet,item' });
@@ -74,12 +85,7 @@ export function ClosingUploadPage() {
     <div className="p-6 max-w-6xl mx-auto">
       <UploadComponent
         title="Closing Stock Upload"
-        columns={[
-          { aliases: ['date', 'closing date', 'stock date'], required: true, fieldName: 'date' },
-          { aliases: ['outlet', 'store', 'shop', 'location'], required: true, fieldName: 'outlet' },
-          { aliases: ['item', 'item name', 'product', 'product name'], required: true, fieldName: 'item' },
-          { aliases: ['qty', 'quantity', 'closing qty', 'closing quantity', 'stock', 'stock qty'], required: true, fieldName: 'qty' },
-        ]}
+        columns={CLOSING_COLUMNS}
         onSave={handleSave}
         onDownload={handleDownload}
         downloadLabel={downloading ? 'Downloading...' : 'Download Closing Stock'}

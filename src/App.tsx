@@ -7,10 +7,10 @@ import { ClosingUploadPage } from '@/pages/ClosingUploadPage';
 import { OutletMappingPage } from '@/pages/OutletMappingPage';
 import { ItemMappingPage } from '@/pages/ItemMappingPage';
 import { ManagerMappingPage } from '@/pages/ManagerMappingPage';
-import { WeightMappingPage } from '@/pages/WeightMappingPage';
-import { RecipeMasterPage } from '@/pages/RecipeMasterPage';
 import { RecipeMappingPage } from '@/pages/RecipeMappingPage';
 import { ReportPage } from '@/pages/ReportPage';
+import { MasterReportPage } from '@/pages/MasterReportPage';
+import { SaleWiseConsumptionPage } from '@/pages/SaleWiseConsumptionPage';
 
 function App() {
   const [page, setPage] = useState<PageId>('dashboard');
@@ -31,10 +31,6 @@ function App() {
         return <ItemMappingPage />;
       case 'manager-mapping':
         return <ManagerMappingPage />;
-      case 'weight-mapping':
-        return <WeightMappingPage />;
-      case 'recipe-master':
-        return <RecipeMasterPage />;
       case 'recipe-mapping':
         return <RecipeMappingPage />;
       case 'report-daily':
@@ -47,6 +43,10 @@ function App() {
         return <ReportPage reportType="manager" title="Manager-wise Report" subtitle="Consumption and variance grouped by area manager" />;
       case 'report-variance':
         return <ReportPage reportType="variance" title="Variance Report" subtitle="Actual vs ideal consumption and closing variance" />;
+      case 'report-master':
+        return <MasterReportPage />;
+      case 'report-sale-ideal':
+        return <SaleWiseConsumptionPage />;
       default:
         return <DashboardPage onNavigate={setPage} />;
     }

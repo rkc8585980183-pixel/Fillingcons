@@ -36,17 +36,7 @@ function round4(n: number): number {
 
 /**
  * Builds one row per (Outlet, Ingredient/Filling) for the report date.
- *
- * Opening  = previous day's Closing Stock for that outlet+ingredient
- * Purchase = previous day's Purchases summed for that outlet+ingredient
- * Closing  = report date's Closing Stock for that outlet+ingredient
- * Actual Consumption = Opening + Purchase - Closing
- *
- * Ideal Consumption for an ingredient = sum, over every recipe_mapping
- * row whose ingredient matches, of:
- *   SaleQty(sale_item, outlet, previous day) * qty_use_gram / filling_weight
- * A combo sale item appears in multiple recipe_mapping rows (one per
- * ingredient it uses) and contributes its full sale quantity to each.
+ * See buildReportRows doc below for the full formula breakdown.
  */
 export function buildReportRows(input: ReportInput): ReportRow[] {
   const { reportDate, sales, purchases, closingStock, recipeMapping, outlets, filters } = input;
@@ -57,7 +47,6 @@ export function buildReportRows(input: ReportInput): ReportRow[] {
     outletMap.set(o.name.toLowerCase(), o);
   }
 
-  // Previous day's sale qty per (outlet, sale_item)
   const prevSalesQty = new Map<string, number>();
   for (const s of sales) {
     if (s.date === prevDay) {
@@ -66,7 +55,6 @@ export function buildReportRows(input: ReportInput): ReportRow[] {
     }
   }
 
-  // Ingredients grouped for lookup, and a category/uom to display per ingredient
   const recipesByIngredient = new Map<string, RecipeMapping[]>();
   const ingredientMeta = new Map<string, { category: string; uom: string }>();
   for (const r of recipeMapping) {
@@ -101,12 +89,10 @@ export function buildReportRows(input: ReportInput): ReportRow[] {
     }
   }
 
-  // Every (outlet, ingredient) combination that has stock movement OR a recipe mapping
   const allKeys = new Set<string>();
   prevClosing.forEach((_, k) => allKeys.add(k));
   prevPurchases.forEach((_, k) => allKeys.add(k));
   todayClosing.forEach((_, k) => allKeys.add(k));
-  // Also add keys for every outlet that sold something whose recipe maps to an ingredient
   const outletsWithSales = new Set<string>();
   for (const s of sales) {
     if (s.date === prevDay) outletsWithSales.add(s.outlet.toLowerCase());
@@ -151,6 +137,7 @@ export function buildReportRows(input: ReportInput): ReportRow[] {
     }
 
     const variance = actualConsumption - idealConsumption;
+    const expectedClosing = opening + purchase - idealConsumption;
 
     rows.push({
       date: reportDate,
@@ -165,6 +152,7 @@ export function buildReportRows(input: ReportInput): ReportRow[] {
       actual_consumption: round4(actualConsumption),
       ideal_consumption: round4(idealConsumption),
       variance: round4(variance),
+      expected_closing: round4(expectedClosing),
       remark: '',
       remark2: '',
     });
@@ -192,5 +180,113 @@ export function sumRows(rows: ReportRow[]): Partial<ReportRow> {
     actual_consumption: round4(rows.reduce((s, r) => s + r.actual_consumption, 0)),
     ideal_consumption: round4(rows.reduce((s, r) => s + r.ideal_consumption, 0)),
     variance: round4(rows.reduce((s, r) => s + r.variance, 0)),
+    expected_closing: round4(rows.reduce((s, r) => s + r.expected_closing, 0)),
   };
+}
+
+/**
+ * Remark: =IF(OR(Ideal=ABS(Variance), ABS(Variance)<=Margin), "Acceptable",
+ *          IF(ABS(Variance)>=Margin, "Need Attention", "OK"))
+ */
+export function computeRemark(ideal: number, variance: number, margin: number): string {
+  if (ideal === Math.abs(variance) || Math.abs(variance) <= margin) return 'Acceptable';
+  if (Math.abs(variance) >= margin) return 'Need Attention';
+  return 'OK';
+}
+
+/**
+ * Remark 2: =IF(Ideal>=ABS(Actual), "OK",
+ *             IF(ABS(Actual)>=Ideal, "Closing Mistake", "Manageable"))
+ */
+export function computeRemark2(ideal: number, actual: number): string {
+  if (ideal >= Math.abs(actual)) return 'OK';
+  if (Math.abs(actual) >= ideal) return 'Closing Mistake';
+  return 'Manageable';
+}
+
+/** Combines every ingredient into one row per outlet (for "All Items" master view). */
+export function aggregateByOutlet(rows: ReportRow[]): ReportRow[] {
+  const map = new Map<string, ReportRow>();
+  for (const r of rows) {
+    const key = r.outlet.toLowerCase();
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...r, item: 'All Items', category: '', uom: r.uom });
+    } else {
+      existing.opening = round4(existing.opening + r.opening);
+      existing.purchase = round4(existing.purchase + r.purchase);
+      existing.closing = round4(existing.closing + r.closing);
+      existing.actual_consumption = round4(existing.actual_consumption + r.actual_consumption);
+      existing.ideal_consumption = round4(existing.ideal_consumption + r.ideal_consumption);
+      existing.variance = round4(existing.variance + r.variance);
+      existing.expected_closing = round4(existing.expected_closing + r.expected_closing);
+      if (existing.uom !== r.uom) existing.uom = '';
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.outlet.localeCompare(b.outlet));
+}
+
+export interface SaleWiseRow {
+  date: string;
+  outlet: string;
+  sale_item: string;
+  category: string;
+  sale_qty: number;
+  ideal_consumption: number;
+}
+
+/**
+ * Outlet-wise breakdown of Ideal Consumption driven directly by Sales
+ * on the given date (no day-shift — this shows what a date's own sales
+ * imply, independent of the main stock-based report).
+ */
+export function buildSaleWiseIdealConsumption(
+  saleDate: string,
+  sales: SalesRecord[],
+  recipeMapping: RecipeMapping[]
+): SaleWiseRow[] {
+  const salesForDate = sales.filter((s) => s.date === saleDate);
+
+  const saleQtyMap = new Map<string, number>();
+  for (const s of salesForDate) {
+    const key = `${s.outlet.toLowerCase()}|${s.item.toLowerCase()}`;
+    saleQtyMap.set(key, (saleQtyMap.get(key) ?? 0) + s.qty);
+  }
+
+  const recipesBySaleItem = new Map<string, RecipeMapping[]>();
+  for (const r of recipeMapping) {
+    const key = r.sale_item.toLowerCase();
+    const list = recipesBySaleItem.get(key) || [];
+    list.push(r);
+    recipesBySaleItem.set(key, list);
+  }
+
+  const rows: SaleWiseRow[] = [];
+  const seen = new Set<string>();
+
+  for (const s of salesForDate) {
+    const key = `${s.outlet.toLowerCase()}|${s.item.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const saleQty = saleQtyMap.get(key) ?? 0;
+    const recipeRows = recipesBySaleItem.get(s.item.toLowerCase()) || [];
+    let ideal = 0;
+    for (const r of recipeRows) {
+      if (r.filling_weight > 0) {
+        ideal += (saleQty * r.qty_use_gram) / r.filling_weight;
+      }
+    }
+
+    rows.push({
+      date: saleDate,
+      outlet: s.outlet,
+      sale_item: s.item,
+      category: s.category || recipeRows[0]?.category || '',
+      sale_qty: saleQty,
+      ideal_consumption: round4(ideal),
+    });
+  }
+
+  return rows.sort((a, b) => a.outlet.localeCompare(b.outlet) || a.sale_item.localeCompare(b.sale_item));
 }

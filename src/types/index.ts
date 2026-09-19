@@ -94,6 +94,7 @@ export interface ReportRow {
   actual_consumption: number;
   ideal_consumption: number;
   variance: number;
+  expected_closing: number;
   remark: string;
   remark2: string;
 }

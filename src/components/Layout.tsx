@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react';
-import { Upload, Map, ClipboardList, FileBarChart, Package, ShoppingCart, TrendingDown, BarChart3, LayoutDashboard, Scale, Layers } from 'lucide-react';
+import { Upload, Map, ClipboardList, FileBarChart, Package, ShoppingCart, TrendingDown, BarChart3, LayoutDashboard, Layers, ListChecks, LayoutGrid } from 'lucide-react';
 
 export type PageId =
   | 'dashboard'
@@ -9,14 +9,14 @@ export type PageId =
   | 'outlet-mapping'
   | 'item-mapping'
   | 'manager-mapping'
-  | 'weight-mapping'
-  | 'recipe-master'
   | 'recipe-mapping'
   | 'report-daily'
   | 'report-outlet'
   | 'report-item'
   | 'report-manager'
-  | 'report-variance';
+  | 'report-variance'
+  | 'report-master'
+  | 'report-sale-ideal';
 
 interface NavItem {
   id: PageId;
@@ -50,14 +50,12 @@ const navSections: NavSection[] = [
       { id: 'outlet-mapping', label: 'Outlet Mapping', icon: <Map size={18} /> },
       { id: 'item-mapping', label: 'Item Mapping', icon: <ClipboardList size={18} /> },
       { id: 'manager-mapping', label: 'Area Manager Mapping', icon: <Map size={18} /> },
-      { id: 'weight-mapping', label: 'Weight Mapping', icon: <Scale size={18} /> },
     ],
   },
   {
     title: 'Master Data',
     items: [
       { id: 'recipe-mapping', label: 'Filling / Recipe Mapping', icon: <Layers size={18} /> },
-      { id: 'recipe-master', label: 'Recipe Master (legacy)', icon: <FileBarChart size={18} /> },
     ],
   },
   {
@@ -68,6 +66,8 @@ const navSections: NavSection[] = [
       { id: 'report-item', label: 'Item-wise Report', icon: <BarChart3 size={18} /> },
       { id: 'report-manager', label: 'Manager-wise Report', icon: <BarChart3 size={18} /> },
       { id: 'report-variance', label: 'Variance Report', icon: <TrendingDown size={18} /> },
+      { id: 'report-master', label: 'Master Report', icon: <LayoutGrid size={18} /> },
+      { id: 'report-sale-ideal', label: 'Ideal Consumption (as per Sale)', icon: <ListChecks size={18} /> },
     ],
   },
 ];
