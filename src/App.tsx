@@ -9,6 +9,7 @@ import { ItemMappingPage } from '@/pages/ItemMappingPage';
 import { ManagerMappingPage } from '@/pages/ManagerMappingPage';
 import { WeightMappingPage } from '@/pages/WeightMappingPage';
 import { RecipeMasterPage } from '@/pages/RecipeMasterPage';
+import { RecipeMappingPage } from '@/pages/RecipeMappingPage';
 import { ReportPage } from '@/pages/ReportPage';
 
 function App() {
@@ -34,12 +35,14 @@ function App() {
         return <WeightMappingPage />;
       case 'recipe-master':
         return <RecipeMasterPage />;
+      case 'recipe-mapping':
+        return <RecipeMappingPage />;
       case 'report-daily':
         return <ReportPage reportType="daily" title="Daily Report" subtitle="Day-by-day consumption and variance breakdown" />;
       case 'report-outlet':
         return <ReportPage reportType="outlet" title="Outlet-wise Report" subtitle="Consumption and variance grouped by outlet" />;
       case 'report-item':
-        return <ReportPage reportType="item" title="Item-wise Report" subtitle="Consumption and variance grouped by item" />;
+        return <ReportPage reportType="item" title="Item-wise Report" subtitle="Consumption and variance grouped by ingredient" />;
       case 'report-manager':
         return <ReportPage reportType="manager" title="Manager-wise Report" subtitle="Consumption and variance grouped by area manager" />;
       case 'report-variance':

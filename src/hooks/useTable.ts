@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import type {
-  AreaManager, Outlet, Item, Weight, Recipe,
+  AreaManager, Outlet, Item, Weight, Recipe, RecipeMapping,
   SalesRecord, PurchaseRecord, ClosingStockRecord,
 } from '@/types';
 
@@ -53,10 +53,8 @@ export function useTable<T extends { id: string }>(
     return { error: null };
   }, [tableName, fetch]);
 
-  const upsert = useCallback(async (rows: Partial<T>[]) => {
-    const { error } = await supabase.from(tableName).upsert(rows, {
-      onConflict: 'date,outlet,item',
-    });
+  const upsert = useCallback(async (rows: Partial<T>[], onConflict: string) => {
+    const { error } = await supabase.from(tableName).upsert(rows, { onConflict });
     if (error) return { error: error.message };
     await fetch();
     return { error: null };
@@ -79,6 +77,9 @@ export function useWeights() {
 }
 export function useRecipes() {
   return useTable<Recipe>('recipes', 'item_name');
+}
+export function useRecipeMapping() {
+  return useTable<RecipeMapping>('recipe_mapping', 'sale_item');
 }
 export function useSales() {
   return useTable<SalesRecord>('sales', 'date');

@@ -1,11 +1,12 @@
-import { useState, useMemo, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
-import { buildReportRows, sumRows, groupBy, getPreviousDay } from '@/lib/report';
-import { exportToExcel, exportToCSV } from '@/lib/excel';
-import type { ReportRow, ReportType } from '@/types';
-import { ReportFilters, type ReportFilterValues } from '@/components/ReportFilters';
+import { useEffect, useMemo, useState } from 'react';
+import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/Button';
-import { Download, FileSpreadsheet, TrendingDown, TrendingUp, AlertTriangle } from 'lucide-react';
+import { ReportFilters, type ReportFilterValues } from '@/components/ReportFilters';
+import { useSales, usePurchases, useClosingStock, useOutlets, useAreaManagers, useRecipeMapping } from '@/hooks/useTable';
+import { buildReportRows, sumRows } from '@/lib/report';
+import { exportToExcel } from '@/lib/excel';
+import type { ReportRow, ReportType } from '@/types';
+import { Download } from 'lucide-react';
 
 interface ReportPageProps {
   reportType: ReportType;
@@ -13,350 +14,108 @@ interface ReportPageProps {
   subtitle: string;
 }
 
-export function ReportPage({ reportType, title, subtitle }: ReportPageProps) {
-  const [filters, setFilters] = useState<ReportFilterValues>({
-    reportDate: new Date().toISOString().split('T')[0],
-  });
-  const [data, setData] = useState<ReportRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [hasRun, setHasRun] = useState(false);
+function today(): string {
+  return new Date().toISOString().split('T')[0];
+}
 
-  const [outletOptions, setOutletOptions] = useState<{ value: string; label: string }[]>([]);
-  const [managerOptions, setManagerOptions] = useState<{ value: string; label: string }[]>([]);
-  const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([]);
-  const [itemOptions, setItemOptions] = useState<{ value: string; label: string }[]>([]);
+export function ReportPage({ title, subtitle }: ReportPageProps) {
+  const { rows: sales } = useSales();
+  const { rows: purchases } = usePurchases();
+  const { rows: closingStock } = useClosingStock();
+  const { rows: outlets } = useOutlets();
+  const { rows: managers } = useAreaManagers();
+  const { rows: recipeMapping } = useRecipeMapping();
 
-  const loadFilterOptions = useCallback(async () => {
-    const [outlets, managers, items] = await Promise.all([
-      supabase.from('outlets').select('name, area_manager, category').order('name'),
-      supabase.from('area_managers').select('name').order('name'),
-      supabase.from('items').select('name, category').order('name'),
-    ]);
+  const [filters, setFilters] = useState<ReportFilterValues>({ reportDate: today() });
+  const [rows, setRows] = useState<ReportRow[]>([]);
+  const [remarks, setRemarks] = useState<Record<string, { remark: string; remark2: string }>>({});
 
-    setOutletOptions((outlets.data || []).map((o: { name: string }) => ({ value: o.name, label: o.name })));
-    setManagerOptions((managers.data || []).map((m: { name: string }) => ({ value: m.name, label: m.name })));
+  const outletOptions = useMemo(
+    () => outlets.map((o) => ({ value: o.name, label: o.name })),
+    [outlets]
+  );
+  const managerOptions = useMemo(
+    () => managers.map((m) => ({ value: m.name, label: m.name })),
+    [managers]
+  );
+  const categoryOptions = useMemo(() => {
+    const set = new Set<string>();
+    recipeMapping.forEach((r) => r.category && set.add(r.category));
+    outlets.forEach((o) => o.category && set.add(o.category));
+    return Array.from(set).sort().map((c) => ({ value: c, label: c }));
+  }, [recipeMapping, outlets]);
+  const itemOptions = useMemo(() => {
+    const set = new Set<string>();
+    recipeMapping.forEach((r) => r.ingredient_name && set.add(r.ingredient_name));
+    return Array.from(set).sort().map((i) => ({ value: i, label: i }));
+  }, [recipeMapping]);
 
-    const cats = new Set<string>();
-    (outlets.data || []).forEach((o: { category: string }) => { if (o.category) cats.add(o.category); });
-    (items.data || []).forEach((i: { category: string }) => { if (i.category) cats.add(i.category); });
-    setCategoryOptions([...cats].sort().map((c) => ({ value: c, label: c })));
+  useEffect(() => {
+    const built = buildReportRows({
+      reportDate: filters.reportDate,
+      sales,
+      purchases,
+      closingStock,
+      recipeMapping,
+      outlets,
+      filters: {
+        outlet: filters.outlet,
+        area_manager: filters.area_manager,
+        category: filters.category,
+        item: filters.item,
+      },
+    });
+    setRows(built);
+  }, [filters, sales, purchases, closingStock, recipeMapping, outlets]);
 
-    setItemOptions((items.data || []).map((i: { name: string }) => ({ value: i.name, label: i.name })));
-  }, []);
+  const rowKey = (r: ReportRow) => `${r.date}|${r.outlet}|${r.item}`;
 
-  useMemo(() => {
-    loadFilterOptions();
-  }, [loadFilterOptions]);
-
-  const runReport = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setHasRun(true);
-
-    try {
-      const prevDay = getPreviousDay(filters.reportDate);
-
-      const [sales, purchases, closing, recipes, outlets, items] = await Promise.all([
-        supabase.from('sales').select('*').in('date', [prevDay, filters.reportDate]),
-        supabase.from('purchases').select('*').in('date', [prevDay, filters.reportDate]),
-        supabase.from('closing_stock').select('*').in('date', [prevDay, filters.reportDate]),
-        supabase.from('recipes').select('*'),
-        supabase.from('outlets').select('*'),
-        supabase.from('items').select('*'),
-      ]);
-
-      if (sales.error || purchases.error || closing.error || recipes.error || outlets.error || items.error) {
-        setError('Failed to load report data. Please try again.');
-        setLoading(false);
-        return;
-      }
-
-      const rows = buildReportRows({
-        reportDate: filters.reportDate,
-        sales: (sales.data || []) as ReportRow[] as unknown as typeof sales.data,
-        purchases: (purchases.data || []) as any,
-        closingStock: (closing.data || []) as any,
-        recipes: (recipes.data || []) as any,
-        outlets: (outlets.data || []) as any,
-        items: (items.data || []) as any,
-        filters: {
-          outlet: filters.outlet,
-          area_manager: filters.area_manager,
-          category: filters.category,
-          item: filters.item,
-        },
-      });
-
-      setData(rows);
-    } catch {
-      setError('An error occurred while generating the report.');
-    }
-    setLoading(false);
-  }, [filters]);
-
-  const handleExportExcel = () => {
-    const exportRows = getExportRows();
-    exportToExcel(exportRows, `${reportType}_report.xlsx`, 'Report');
-  };
-
-  const handleExportCSV = () => {
-    const exportRows = getExportRows();
-    exportToCSV(exportRows, `${reportType}_report.csv`);
-  };
-
-  const getExportRows = (): Record<string, string | number>[] => {
-    if (reportType === 'outlet') {
-      const grouped = groupBy(data, (r) => r.outlet);
-      return [...grouped.entries()].map(([outlet, rows]) => ({
-        Outlet: outlet,
-        ...sumRows(rows) as Record<string, number>,
-      }));
-    }
-    if (reportType === 'item') {
-      const grouped = groupBy(data, (r) => r.item);
-      return [...grouped.entries()].map(([item, rows]) => ({
-        Item: item,
-        ...sumRows(rows) as Record<string, number>,
-      }));
-    }
-    if (reportType === 'manager') {
-      const grouped = groupBy(data, (r) => r.area_manager || 'Unassigned');
-      return [...grouped.entries()].map(([manager, rows]) => ({
-        'Area Manager': manager,
-        ...sumRows(rows) as Record<string, number>,
-      }));
-    }
-    return data.map((r) => ({
-      Date: r.date,
-      Outlet: r.outlet,
-      Item: r.item,
-      Category: r.category,
-      'Area Manager': r.area_manager,
-      Opening: r.opening,
-      Purchase: r.purchase,
-      Sales: r.sales,
-      Closing: r.closing,
-      'Actual Consumption': r.actual_consumption,
-      'Ideal Consumption': r.ideal_consumption,
-      Variance: r.variance,
-      'Ideal Closing': r.ideal_closing,
-      'Closing Variance': r.closing_variance,
+  const updateRemark = (r: ReportRow, field: 'remark' | 'remark2', value: string) => {
+    setRemarks((prev) => ({
+      ...prev,
+      [rowKey(r)]: { ...prev[rowKey(r)], remark: prev[rowKey(r)]?.remark ?? '', remark2: prev[rowKey(r)]?.remark2 ?? '', [field]: value },
     }));
   };
 
-  const totals = data.length > 0 ? sumRows(data) : null;
+  const rowsWithRemarks = rows.map((r) => ({
+    ...r,
+    remark: remarks[rowKey(r)]?.remark ?? '',
+    remark2: remarks[rowKey(r)]?.remark2 ?? '',
+  }));
 
-  const renderTable = () => {
-    if (loading) {
-      return (
-        <div className="text-center py-12 text-slate-400 border border-slate-200 rounded-lg bg-white">
-          Generating report...
-        </div>
-      );
-    }
-    if (error) {
-      return (
-        <div className="text-center py-12 text-red-500 border border-red-200 rounded-lg bg-red-50">
-          {error}
-        </div>
-      );
-    }
-    if (!hasRun) {
-      return (
-        <div className="text-center py-12 text-slate-400 border border-slate-200 rounded-lg bg-white">
-          Select a Report Date and click Generate to view the report.
-        </div>
-      );
-    }
-    if (data.length === 0) {
-      return (
-        <div className="text-center py-12 text-slate-400 border border-slate-200 rounded-lg bg-white">
-          No data found for the selected filters. Make sure you have uploaded sales, purchases, and closing stock data.
-        </div>
-      );
-    }
+  const totals = sumRows(rowsWithRemarks);
 
-    if (reportType === 'outlet' || reportType === 'item' || reportType === 'manager') {
-      const groupKey = reportType === 'outlet' ? 'outlet' : reportType === 'item' ? 'item' : 'area_manager';
-      const groupLabel = reportType === 'outlet' ? 'Outlet' : reportType === 'item' ? 'Item' : 'Area Manager';
-      const grouped = groupBy(data, (r) => (r as any)[groupKey] || 'Unassigned');
-
-      return (
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="px-4 py-3 text-left font-semibold text-slate-600">{groupLabel}</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Opening</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Purchase</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Sales</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Closing</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Actual Cons.</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Ideal Cons.</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Variance</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Ideal Closing</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Closing Var.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...grouped.entries()].map(([key, rows]) => {
-                const s = sumRows(rows);
-                return (
-                  <tr key={key} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="px-4 py-2.5 text-slate-700 font-medium">{key}</td>
-                    <td className="px-4 py-2.5 text-right text-slate-600">{fmt(s.opening)}</td>
-                    <td className="px-4 py-2.5 text-right text-slate-600">{fmt(s.purchase)}</td>
-                    <td className="px-4 py-2.5 text-right text-slate-600">{fmt(s.sales)}</td>
-                    <td className="px-4 py-2.5 text-right text-slate-600">{fmt(s.closing)}</td>
-                    <td className="px-4 py-2.5 text-right text-slate-600">{fmt(s.actual_consumption)}</td>
-                    <td className="px-4 py-2.5 text-right text-slate-600">{fmt(s.ideal_consumption)}</td>
-                    <td className={`px-4 py-2.5 text-right font-medium ${(s.variance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {fmt(s.variance)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right text-slate-600">{fmt(s.ideal_closing)}</td>
-                    <td className={`px-4 py-2.5 text-right font-medium ${(s.closing_variance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {fmt(s.closing_variance)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            {totals && (
-              <tfoot>
-                <tr className="bg-slate-100 font-semibold border-t-2 border-slate-300">
-                  <td className="px-4 py-3 text-slate-800">TOTAL</td>
-                  <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.opening)}</td>
-                  <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.purchase)}</td>
-                  <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.sales)}</td>
-                  <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.closing)}</td>
-                  <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.actual_consumption)}</td>
-                  <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.ideal_consumption)}</td>
-                  <td className={`px-4 py-3 text-right ${(totals.variance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {fmt(totals.variance)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.ideal_closing)}</td>
-                  <td className={`px-4 py-3 text-right ${(totals.closing_variance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {fmt(totals.closing_variance)}
-                  </td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
-      );
-    }
-
-    const showVarianceColumns = reportType === 'variance';
-
-    return (
-      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200">
-              {!showVarianceColumns && (
-                <>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Outlet</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Item</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Category</th>
-                </>
-              )}
-              {showVarianceColumns && (
-                <>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Outlet</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Item</th>
-                </>
-              )}
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">Opening</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">Purchase</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">Sales</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">Closing</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">Actual Cons.</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">Ideal Cons.</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">Variance</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">Ideal Closing</th>
-              <th className="px-4 py-3 text-right font-semibold text-slate-600">Closing Var.</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((row, i) => (
-              <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
-                <td className="px-4 py-2.5 text-slate-700 font-medium">{row.outlet}</td>
-                <td className="px-4 py-2.5 text-slate-700">{row.item}</td>
-                {!showVarianceColumns && <td className="px-4 py-2.5 text-slate-600">{row.category || '-'}</td>}
-                <td className="px-4 py-2.5 text-right text-slate-600">{fmt(row.opening)}</td>
-                <td className="px-4 py-2.5 text-right text-slate-600">{fmt(row.purchase)}</td>
-                <td className="px-4 py-2.5 text-right text-slate-600">{fmt(row.sales)}</td>
-                <td className="px-4 py-2.5 text-right text-slate-600">{fmt(row.closing)}</td>
-                <td className="px-4 py-2.5 text-right text-slate-600">{fmt(row.actual_consumption)}</td>
-                <td className="px-4 py-2.5 text-right text-slate-600">{fmt(row.ideal_consumption)}</td>
-                <td className={`px-4 py-2.5 text-right font-medium ${row.variance < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                  {fmt(row.variance)}
-                </td>
-                <td className="px-4 py-2.5 text-right text-slate-600">{fmt(row.ideal_closing)}</td>
-                <td className={`px-4 py-2.5 text-right font-medium ${row.closing_variance < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                  {fmt(row.closing_variance)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          {totals && (
-            <tfoot>
-              <tr className="bg-slate-100 font-semibold border-t-2 border-slate-300">
-                <td className="px-4 py-3 text-slate-800" colSpan={showVarianceColumns ? 2 : 3}>TOTAL</td>
-                <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.opening)}</td>
-                <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.purchase)}</td>
-                <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.sales)}</td>
-                <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.closing)}</td>
-                <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.actual_consumption)}</td>
-                <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.ideal_consumption)}</td>
-                <td className={`px-4 py-3 text-right ${(totals.variance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                  {fmt(totals.variance)}
-                </td>
-                <td className="px-4 py-3 text-right text-slate-800">{fmt(totals.ideal_closing)}</td>
-                <td className={`px-4 py-3 text-right ${(totals.closing_variance || 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                  {fmt(totals.closing_variance)}
-                </td>
-              </tr>
-            </tfoot>
-          )}
-        </table>
-      </div>
-    );
+  const handleDownload = () => {
+    const data = rowsWithRemarks.map((r) => ({
+      'Area Manager': r.area_manager,
+      'Outlet Name': r.outlet,
+      'Item': r.item,
+      'Category': r.category,
+      'UOM': r.uom,
+      'Day-1 Closing Stock (Opening)': r.opening,
+      'Day-1 Purchase': r.purchase,
+      'Day Closing Stock': r.closing,
+      'Actual Consumption': r.actual_consumption,
+      'Ideal Consumption (as per sale)': r.ideal_consumption,
+      'Variance': r.variance,
+      'Remark': r.remark,
+      'Remark 2': r.remark2,
+    }));
+    exportToExcel(data, `report_${filters.reportDate}.xlsx`, 'Report');
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900">{title}</h2>
-          <p className="text-slate-500 text-sm mt-1">{subtitle}</p>
-        </div>
-        <div className="flex gap-2">
-          <Button onClick={runReport} disabled={loading || !filters.reportDate}>
-            {loading ? 'Generating...' : 'Generate Report'}
+    <div className="p-6 max-w-full mx-auto">
+      <PageHeader
+        title={title}
+        subtitle={subtitle}
+        actions={
+          <Button onClick={handleDownload}>
+            <Download size={16} />
+            Download Report
           </Button>
-          {data.length > 0 && (
-            <>
-              <Button variant="secondary" onClick={handleExportExcel}>
-                <FileSpreadsheet size={16} />
-                Excel
-              </Button>
-              <Button variant="secondary" onClick={handleExportCSV}>
-                <Download size={16} />
-                CSV
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
-
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-        <p className="text-sm text-blue-800">
-          <strong>Report Date: {filters.reportDate}</strong> &mdash; Opening = previous day closing,
-          Purchase = previous day purchase, Sales = previous day sales, Closing = selected date closing.
-        </p>
-      </div>
+        }
+      />
 
       <ReportFilters
         filters={filters}
@@ -367,12 +126,84 @@ export function ReportPage({ reportType, title, subtitle }: ReportPageProps) {
         items={itemOptions}
       />
 
-      {renderTable()}
+      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-50 border-b border-slate-200">
+              <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">Area Manager</th>
+              <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">Outlet Name</th>
+              <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">Item</th>
+              <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">UOM</th>
+              <th className="px-3 py-3 text-right font-semibold text-slate-600 whitespace-nowrap">Day-1 Closing</th>
+              <th className="px-3 py-3 text-right font-semibold text-slate-600 whitespace-nowrap">Day-1 Purchase</th>
+              <th className="px-3 py-3 text-right font-semibold text-slate-600 whitespace-nowrap">Day Closing</th>
+              <th className="px-3 py-3 text-right font-semibold text-slate-600 whitespace-nowrap">Actual Consumption</th>
+              <th className="px-3 py-3 text-right font-semibold text-slate-600 whitespace-nowrap">Ideal Consumption</th>
+              <th className="px-3 py-3 text-right font-semibold text-slate-600 whitespace-nowrap">Variance</th>
+              <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">Remark</th>
+              <th className="px-3 py-3 text-left font-semibold text-slate-600 whitespace-nowrap">Remark 2</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rowsWithRemarks.length === 0 ? (
+              <tr>
+                <td colSpan={12} className="px-4 py-10 text-center text-slate-400">
+                  No data for this date/filter combination.
+                </td>
+              </tr>
+            ) : (
+              <>
+                {rowsWithRemarks.map((r) => (
+                  <tr key={rowKey(r)} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{r.area_manager || '-'}</td>
+                    <td className="px-3 py-2 text-slate-700 font-medium whitespace-nowrap">{r.outlet}</td>
+                    <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{r.item}</td>
+                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{r.uom || '-'}</td>
+                    <td className="px-3 py-2 text-right text-slate-700">{r.opening}</td>
+                    <td className="px-3 py-2 text-right text-slate-700">{r.purchase}</td>
+                    <td className="px-3 py-2 text-right text-slate-700">{r.closing}</td>
+                    <td className="px-3 py-2 text-right text-slate-700">{r.actual_consumption}</td>
+                    <td className="px-3 py-2 text-right text-slate-700">{r.ideal_consumption}</td>
+                    <td className={`px-3 py-2 text-right font-medium ${r.variance < 0 ? 'text-red-600' : r.variance > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                      {r.variance}
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        className="w-32 px-2 py-1 border border-slate-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        value={r.remark}
+                        onChange={(e) => updateRemark(r, 'remark', e.target.value)}
+                        placeholder="Remark"
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        className="w-32 px-2 py-1 border border-slate-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        value={r.remark2}
+                        onChange={(e) => updateRemark(r, 'remark2', e.target.value)}
+                        placeholder="Remark 2"
+                      />
+                    </td>
+                  </tr>
+                ))}
+                <tr className="bg-slate-50 font-semibold border-t-2 border-slate-300">
+                  <td className="px-3 py-3 text-slate-700" colSpan={4}>Total</td>
+                  <td className="px-3 py-3 text-right text-slate-800">{totals.opening}</td>
+                  <td className="px-3 py-3 text-right text-slate-800">{totals.purchase}</td>
+                  <td className="px-3 py-3 text-right text-slate-800">{totals.closing}</td>
+                  <td className="px-3 py-3 text-right text-slate-800">{totals.actual_consumption}</td>
+                  <td className="px-3 py-3 text-right text-slate-800">{totals.ideal_consumption}</td>
+                  <td className="px-3 py-3 text-right text-slate-800">{totals.variance}</td>
+                  <td colSpan={2}></td>
+                </tr>
+              </>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-slate-400 text-xs mt-3">
+        Note: Remark / Remark 2 are typed in directly on this screen and are included in the downloaded report,
+        but are not saved permanently yet — they reset if you change the date/filters or reload the page.
+      </p>
     </div>
   );
-}
-
-function fmt(n: number | undefined | null): string {
-  if (n === undefined || n === null) return '-';
-  return Number.isInteger(n) ? String(n) : n.toFixed(3);
 }

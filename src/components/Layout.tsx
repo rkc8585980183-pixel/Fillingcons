@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react';
-import { Upload, Map, ClipboardList, FileBarChart, Package, ShoppingCart, TrendingDown, BarChart3, LayoutDashboard, Scale } from 'lucide-react';
+import { Upload, Map, ClipboardList, FileBarChart, Package, ShoppingCart, TrendingDown, BarChart3, LayoutDashboard, Scale, Layers } from 'lucide-react';
 
 export type PageId =
   | 'dashboard'
@@ -11,6 +11,7 @@ export type PageId =
   | 'manager-mapping'
   | 'weight-mapping'
   | 'recipe-master'
+  | 'recipe-mapping'
   | 'report-daily'
   | 'report-outlet'
   | 'report-item'
@@ -55,7 +56,8 @@ const navSections: NavSection[] = [
   {
     title: 'Master Data',
     items: [
-      { id: 'recipe-master', label: 'Recipe Master', icon: <FileBarChart size={18} /> },
+      { id: 'recipe-mapping', label: 'Filling / Recipe Mapping', icon: <Layers size={18} /> },
+      { id: 'recipe-master', label: 'Recipe Master (legacy)', icon: <FileBarChart size={18} /> },
     ],
   },
   {

@@ -34,6 +34,19 @@ export interface Recipe {
   created_at?: string;
 }
 
+/** Bill of materials: one sale item can map to multiple ingredient rows (combos). */
+export interface RecipeMapping {
+  id: string;
+  sale_item: string;
+  category: string;
+  ingredient_code: string;
+  ingredient_name: string;
+  filling_weight: number;
+  uom: string;
+  qty_use_gram: number;
+  created_at?: string;
+}
+
 export interface SalesRecord {
   id: string;
   date: string;
@@ -67,21 +80,22 @@ export interface ClosingStockRecord {
   created_at?: string;
 }
 
+/** One row = one (outlet, ingredient/filling) for a report date. */
 export interface ReportRow {
   date: string;
   outlet: string;
   item: string;
   category: string;
   area_manager: string;
+  uom: string;
   opening: number;
   purchase: number;
-  sales: number;
   closing: number;
   actual_consumption: number;
   ideal_consumption: number;
   variance: number;
-  ideal_closing: number;
-  closing_variance: number;
+  remark: string;
+  remark2: string;
 }
 
 export type ReportType = 'daily' | 'outlet' | 'item' | 'manager' | 'variance';
