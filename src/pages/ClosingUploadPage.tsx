@@ -9,6 +9,8 @@ import { Input } from '@/components/Input';
 import { Plus, Pencil, Trash2, X } from 'lucide-react';
 import type { ClosingStockRecord } from '@/types';
 
+const CHUNK_SIZE = 500;
+
 // Maps to the real Closing Stock raw export headers:
 // Outlet, Period, Period Date, Cadence, Item Code, Item Name, Category, ..., Unit, Qty, ...
 const CLOSING_COLUMNS: UploadColumn[] = [
@@ -27,11 +29,28 @@ export function ClosingUploadPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   // Closing is unique by (date, outlet, item): upsert replaces the
-  // existing snapshot for that key instead of duplicating it.
-  const handleSave = async (data: Record<string, string | number>[]) => {
-    const { error } = await supabase
-      .from('closing_stock')
-      .upsert(data, { onConflict: 'date,outlet,item' });
+  // existing snapshot instead of duplicating it. Chunked for large files.
+  const handleSave = async (
+    data: Record<string, string | number>[],
+    onProgress?: (msg: string) => void
+  ) => {
+    const total = data.length;
+    let done = 0;
+    for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+      const chunk = data.slice(i, i + CHUNK_SIZE);
+      const { error } = await supabase
+        .from('closing_stock')
+        .upsert(chunk, { onConflict: 'date,outlet,item' });
+      if (error) return { error: error.message };
+      done += chunk.length;
+      onProgress?.(`Saved ${done} of ${total} rows...`);
+    }
+    await refetch();
+    return { error: null };
+  };
+
+  const handleClearAll = async () => {
+    const { error } = await supabase.from('closing_stock').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     if (error) return { error: error.message };
     await refetch();
     return { error: null };
@@ -87,6 +106,7 @@ export function ClosingUploadPage() {
         title="Closing Stock Upload"
         columns={CLOSING_COLUMNS}
         onSave={handleSave}
+        onClearAll={handleClearAll}
         onDownload={handleDownload}
         downloadLabel={downloading ? 'Downloading...' : 'Download Closing Stock'}
         existingCount={rows.length}

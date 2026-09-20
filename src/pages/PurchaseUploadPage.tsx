@@ -3,12 +3,11 @@ import { UploadComponent, exportToExcel, type UploadColumn } from '@/components/
 import { usePurchases } from '@/hooks/useTable';
 import { supabase } from '@/lib/supabase';
 
-// Maps to the real Purchase Excel export headers.
-// Date and Quantity are taken from the PO itself (PurchaseOrder Date /
-// PO Confirmed Qty) rather than Received Date / Received Qty, because
-// many POs are physically received before the source system marks them
-// as "Received" — using the confirmed PO fields means every placed
-// order is counted, not just the ones already flagged received there.
+const CHUNK_SIZE = 500;
+
+// Date and Quantity come from the PO itself (PurchaseOrder Date / PO
+// Confirmed Qty), not Received Date / Received Qty, so every placed
+// order counts even before the source system marks it "Received".
 const PURCHASE_COLUMNS: UploadColumn[] = [
   { fieldName: 'date', label: 'Date', aliases: ['purchaseorder date', 'purchase order date', 'po date'], required: true, type: 'date' },
   { fieldName: 'outlet', label: 'Outlet', aliases: ['delivery location', 'delivery location code'], required: true },
@@ -23,22 +22,33 @@ export function PurchaseUploadPage() {
   const { rows, refetch } = usePurchases();
   const [downloading, setDownloading] = useState(false);
 
-  // Multiple purchase rows per Date + Outlet + Item are valid (separate POs).
-  // Date-wise replace: for every date in the file, wipe that date's existing
-  // rows and re-insert the freshly parsed ones. Other dates are untouched.
-  const handleSave = async (data: Record<string, string | number>[]) => {
+  const handleSave = async (
+    data: Record<string, string | number>[],
+    onProgress?: (msg: string) => void
+  ) => {
     const dates = [...new Set(data.map((r) => String(r.date)))];
 
-    for (const d of dates) {
-      const rowsForDate = data.filter((r) => String(r.date) === d);
+    onProgress?.('Clearing existing data for the selected date(s)...');
+    const { error: delError } = await supabase.from('purchases').delete().in('date', dates);
+    if (delError) return { error: delError.message };
 
-      const { error: delError } = await supabase.from('purchases').delete().eq('date', d);
-      if (delError) return { error: delError.message };
-
-      const { error: insError } = await supabase.from('purchases').insert(rowsForDate);
+    const total = data.length;
+    let done = 0;
+    for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+      const chunk = data.slice(i, i + CHUNK_SIZE);
+      const { error: insError } = await supabase.from('purchases').insert(chunk);
       if (insError) return { error: insError.message };
+      done += chunk.length;
+      onProgress?.(`Saved ${done} of ${total} rows...`);
     }
 
+    await refetch();
+    return { error: null };
+  };
+
+  const handleClearAll = async () => {
+    const { error } = await supabase.from('purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (error) return { error: error.message };
     await refetch();
     return { error: null };
   };
@@ -61,6 +71,7 @@ export function PurchaseUploadPage() {
       title="Purchase Upload"
       columns={PURCHASE_COLUMNS}
       onSave={handleSave}
+      onClearAll={handleClearAll}
       onDownload={handleDownload}
       downloadLabel={downloading ? 'Downloading...' : 'Download Purchase Data'}
       existingCount={rows.length}

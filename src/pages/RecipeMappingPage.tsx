@@ -9,9 +9,8 @@ import { useRecipeMapping } from '@/hooks/useTable';
 import { supabase } from '@/lib/supabase';
 import type { RecipeMapping } from '@/types';
 
-// Maps to the Filling/Recipe BOM sheet headers:
-// Sale item name, Category, Ingredients Code, Filling in sale itme,
-// Unit of Filling, UOM, Qty Of use in item in gram
+const CHUNK_SIZE = 500;
+
 const RECIPE_COLUMNS: UploadColumn[] = [
   { fieldName: 'sale_item', label: 'Sale Item', aliases: ['sale item name', 'sale item'], required: true },
   { fieldName: 'category', label: 'Category', aliases: ['category'], required: false },
@@ -42,14 +41,27 @@ export function RecipeMappingPage() {
       r.ingredient_code.toLowerCase().includes(search.toLowerCase())
   );
 
-  // Bulk upload: re-uploading the same Sale Item + Ingredient Code
-  // updates that BOM line instead of duplicating it. Different rows for
-  // the same sale item (combo using multiple ingredients) are separate
-  // lines and both stay.
-  const handleBulkSave = async (data: Record<string, string | number>[]) => {
-    const { error } = await supabase
-      .from('recipe_mapping')
-      .upsert(data, { onConflict: 'sale_item,ingredient_code' });
+  const handleBulkSave = async (
+    data: Record<string, string | number>[],
+    onProgress?: (msg: string) => void
+  ) => {
+    const total = data.length;
+    let done = 0;
+    for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+      const chunk = data.slice(i, i + CHUNK_SIZE);
+      const { error } = await supabase
+        .from('recipe_mapping')
+        .upsert(chunk, { onConflict: 'sale_item,ingredient_code' });
+      if (error) return { error: error.message };
+      done += chunk.length;
+      onProgress?.(`Saved ${done} of ${total} rows...`);
+    }
+    await refetch();
+    return { error: null };
+  };
+
+  const handleClearAll = async () => {
+    const { error } = await supabase.from('recipe_mapping').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     if (error) return { error: error.message };
     await refetch();
     return { error: null };
@@ -126,6 +138,7 @@ export function RecipeMappingPage() {
           title="Bulk Upload Recipe Mapping"
           columns={RECIPE_COLUMNS}
           onSave={handleBulkSave}
+          onClearAll={handleClearAll}
           onDownload={handleDownload}
           downloadLabel="Download Recipe Mapping"
           existingCount={rows.length}

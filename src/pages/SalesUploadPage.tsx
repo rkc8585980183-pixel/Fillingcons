@@ -3,8 +3,9 @@ import { UploadComponent, exportToExcel, type UploadColumn } from '@/components/
 import { useSales } from '@/hooks/useTable';
 import { supabase } from '@/lib/supabase';
 
-// Maps to the real Sale CSV export headers:
-// restaurant_name, invoice_no, date, ..., item_name, category_name, sap_code, ..., item_quantity, ...
+const CHUNK_SIZE = 500;
+
+// Maps to the real Sale CSV export headers.
 const SALE_COLUMNS: UploadColumn[] = [
   { fieldName: 'date', label: 'Date', aliases: ['date'], required: true, type: 'date' },
   { fieldName: 'outlet', label: 'Outlet', aliases: ['restaurant_name', 'restaurant name', 'outlet'], required: true },
@@ -19,22 +20,36 @@ export function SalesUploadPage() {
   const { rows, refetch } = useSales();
   const [downloading, setDownloading] = useState(false);
 
-  // Multiple sale rows per Date + Outlet + Item are valid (separate invoices).
-  // Date-wise replace: for every date in the file, wipe that date's existing
-  // rows and re-insert the freshly parsed ones. Other dates are untouched.
-  const handleSave = async (data: Record<string, string | number>[]) => {
+  // Fast path for large files: ONE delete covering every date in the file,
+  // then insert in fixed-size chunks (avoids one round-trip per date and
+  // avoids sending one giant payload for the whole file at once).
+  const handleSave = async (
+    data: Record<string, string | number>[],
+    onProgress?: (msg: string) => void
+  ) => {
     const dates = [...new Set(data.map((r) => String(r.date)))];
 
-    for (const d of dates) {
-      const rowsForDate = data.filter((r) => String(r.date) === d);
+    onProgress?.('Clearing existing data for the selected date(s)...');
+    const { error: delError } = await supabase.from('sales').delete().in('date', dates);
+    if (delError) return { error: delError.message };
 
-      const { error: delError } = await supabase.from('sales').delete().eq('date', d);
-      if (delError) return { error: delError.message };
-
-      const { error: insError } = await supabase.from('sales').insert(rowsForDate);
+    const total = data.length;
+    let done = 0;
+    for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+      const chunk = data.slice(i, i + CHUNK_SIZE);
+      const { error: insError } = await supabase.from('sales').insert(chunk);
       if (insError) return { error: insError.message };
+      done += chunk.length;
+      onProgress?.(`Saved ${done} of ${total} rows...`);
     }
 
+    await refetch();
+    return { error: null };
+  };
+
+  const handleClearAll = async () => {
+    const { error } = await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (error) return { error: error.message };
     await refetch();
     return { error: null };
   };
@@ -57,6 +72,7 @@ export function SalesUploadPage() {
       title="Sales Upload"
       columns={SALE_COLUMNS}
       onSave={handleSave}
+      onClearAll={handleClearAll}
       onDownload={handleDownload}
       downloadLabel={downloading ? 'Downloading...' : 'Download Sales Data'}
       existingCount={rows.length}

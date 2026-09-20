@@ -1,29 +1,26 @@
 import { useState, useCallback, useRef } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Download } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Download, Trash2 } from 'lucide-react';
 import { Button } from '@/components/Button';
 import { parseExcelFile, findColumn, parseDate, parseNumber, exportToExcel, exportToCSV, type ParsedRow } from '@/lib/excel';
 
 export interface UploadColumn {
-  /** Key used in the row object passed to onSave, e.g. 'date', 'outlet', 'invoice_no' */
   fieldName: string;
-  /** Human label shown in the preview table header and in error/help text */
   label: string;
-  /** Possible source header names in the uploaded file, in priority order.
-   *  Matching ignores case, spacing and punctuation (see normalizeHeader). */
   aliases: string[];
-  /** Whether this field must be present for a row to be considered valid */
   required: boolean;
-  /** How to parse the raw cell value. Defaults to 'text'. */
   type?: 'text' | 'number' | 'date';
 }
 
 interface UploadComponentProps {
   title: string;
   columns: UploadColumn[];
-  onSave: (rows: Record<string, string | number>[]) => Promise<{ error: string | null }>;
+  /** onProgress lets onSave report status while chunking large saves. */
+  onSave: (rows: Record<string, string | number>[], onProgress?: (msg: string) => void) => Promise<{ error: string | null }>;
   onDownload: () => void;
   downloadLabel: string;
   existingCount: number;
+  /** If provided, shows a "Clear All Data" button that wipes every stored record for this table. */
+  onClearAll?: () => Promise<{ error: string | null }>;
 }
 
 interface PreviewRow {
@@ -32,10 +29,12 @@ interface PreviewRow {
   _error: string;
 }
 
-export function UploadComponent({ title, columns, onSave, onDownload, downloadLabel, existingCount }: UploadComponentProps) {
+export function UploadComponent({ title, columns, onSave, onDownload, downloadLabel, existingCount, onClearAll }: UploadComponentProps) {
   const [preview, setPreview] = useState<PreviewRow[]>([]);
   const [fileName, setFileName] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<string>('');
+  const [clearing, setClearing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -106,8 +105,10 @@ export function UploadComponent({ title, columns, onSave, onDownload, downloadLa
 
     setUploading(true);
     setMessage(null);
-    const result = await onSave(validRows);
+    setProgress(`Preparing to save ${validRows.length} rows...`);
+    const result = await onSave(validRows, (msg) => setProgress(msg));
     setUploading(false);
+    setProgress('');
 
     if (result.error) {
       setMessage({ type: 'error', text: result.error });
@@ -118,22 +119,49 @@ export function UploadComponent({ title, columns, onSave, onDownload, downloadLa
     }
   };
 
+  const handleClearAll = async () => {
+    if (!onClearAll) return;
+    const confirmed = window.confirm(
+      `This will permanently delete ALL ${existingCount} stored records for "${title}". This cannot be undone. Continue?`
+    );
+    if (!confirmed) return;
+
+    setClearing(true);
+    setMessage(null);
+    const result = await onClearAll();
+    setClearing(false);
+
+    if (result.error) {
+      setMessage({ type: 'error', text: result.error });
+    } else {
+      setMessage({ type: 'success', text: 'All data cleared.' });
+    }
+  };
+
   const validCount = preview.filter((r) => r._valid).length;
   const invalidCount = preview.length - validCount;
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h2 className="text-2xl font-bold text-slate-900">{title}</h2>
           <p className="text-slate-500 text-sm mt-1">
             Upload Excel or CSV files. Required columns: {requiredLabels}. {existingCount} records currently stored.
           </p>
         </div>
-        <Button variant="secondary" onClick={onDownload}>
-          <Download size={16} />
-          {downloadLabel}
-        </Button>
+        <div className="flex gap-2">
+          {onClearAll && (
+            <Button variant="danger" onClick={handleClearAll} disabled={clearing || existingCount === 0}>
+              <Trash2 size={16} />
+              {clearing ? 'Clearing...' : 'Clear All Data'}
+            </Button>
+          )}
+          <Button variant="secondary" onClick={onDownload}>
+            <Download size={16} />
+            {downloadLabel}
+          </Button>
+        </div>
       </div>
 
       <div
@@ -171,7 +199,7 @@ export function UploadComponent({ title, columns, onSave, onDownload, downloadLa
 
       {preview.length > 0 && (
         <div>
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
             <div className="flex items-center gap-4 text-sm">
               <span className="text-slate-600">
                 <span className="font-semibold text-slate-800">{preview.length}</span> rows parsed
@@ -184,9 +212,12 @@ export function UploadComponent({ title, columns, onSave, onDownload, downloadLa
                   <span className="font-semibold">{invalidCount}</span> invalid
                 </span>
               )}
+              {uploading && progress && (
+                <span className="text-blue-600 font-medium">{progress}</span>
+              )}
             </div>
             <div className="flex gap-2">
-              <Button variant="secondary" onClick={() => { setPreview([]); setFileName(''); }}>
+              <Button variant="secondary" onClick={() => { setPreview([]); setFileName(''); }} disabled={uploading}>
                 Cancel
               </Button>
               <Button onClick={handleSave} disabled={uploading || validCount === 0}>
